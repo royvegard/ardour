@@ -18,48 +18,51 @@
 
 #include <string>
 
-#ifndef typed_value_h
-#define typed_value_h
+#ifndef _ardour_surface_websockets_typed_value_h_
+#define _ardour_surface_websockets_typed_value_h_
 
 class TypedValue
 {
-  public:
+public:
+	enum Type {
+		Empty,
+		Bool,
+		Int,
+		Double,
+		String
+	};
 
-    enum Type {
-        Empty,
-        Bool,
-        Int,
-        Double,
-        String
-    };
+	TypedValue ();
+	TypedValue (bool);
+	TypedValue (int);
+	TypedValue (double);
+	TypedValue (std::string);
 
-    TypedValue ();
-    TypedValue (bool);
-    TypedValue (int);
-    TypedValue (double);
-    TypedValue (std::string);
+	bool empty () const
+	{
+		return _type == Empty;
+	};
+	Type type () const
+	{
+		return _type;
+	};
 
-    bool empty () const { return _type == Empty; };
-    Type type () const { return _type; };
+	operator bool () const;
+	operator int () const;
+	operator double () const;
+	operator std::string () const;
 
-    operator bool () const;
-    operator int () const;
-    operator double () const;
-    operator std::string () const;
+	bool operator== (const TypedValue& other) const;
+	bool operator!= (const TypedValue& other) const;
 
-    bool operator== (const TypedValue& other) const;
-    bool operator!= (const TypedValue& other) const;
+	std::string debug_str () const;
 
-    std::string debug_str () const;
-
-  private:
-
-    Type _type;
-    bool _b;
-    int _i;
-    double _d;
-    std::string _s;
-
+private:
+	Type        _type;
+	bool        _b;
+	int         _i;
+	double      _d;
+	std::string _s;
 };
 
 #endif // typed_value_h

@@ -16,21 +16,20 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef ardour_globals_h
-#define ardour_globals_h
+#ifndef _ardour_surface_websockets_globals_h_
+#define _ardour_surface_websockets_globals_h_
 
 #include "component.h"
 
 class ArdourGlobals : public SurfaceComponent
 {
-  public:
+public:
+	ArdourGlobals (ArdourSurface::ArdourWebsockets& surface)
+	    : SurfaceComponent (surface){};
+	virtual ~ArdourGlobals (){};
 
-    ArdourGlobals (ArdourSurface::ArdourWebsockets& surface) : SurfaceComponent (surface) {};
-    virtual ~ArdourGlobals () {};
-
-    double tempo () const;
-    void set_tempo (double);
-
+	double tempo () const;
+	void   set_tempo (double);
 };
 
 #endif // ardour_globals_h

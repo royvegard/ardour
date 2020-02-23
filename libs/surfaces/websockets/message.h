@@ -16,30 +16,36 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef websockets_message_h
-#define websockets_message_h
+#ifndef _ardour_surface_websockets_message_h_
+#define _ardour_surface_websockets_message_h_
 
 #include "state.h"
 
 class NodeStateMessage
 {
-  public:
+public:
+	NodeStateMessage (const NodeState& state);
+	NodeStateMessage (void*, size_t);
 
-    NodeStateMessage (const NodeState& state);
-    NodeStateMessage (void *, size_t);
+	size_t serialize (void*, size_t) const;
 
-    size_t serialize (void *, size_t) const;
+	bool is_valid () const
+	{
+		return _valid;
+	}
+	bool is_write () const
+	{
+		return _write;
+	}
+	const NodeState& state () const
+	{
+		return _state;
+	}
 
-    bool is_valid () const { return _valid; }
-    bool is_write () const { return _write; }
-    const NodeState& state () const { return _state; }
-    
-  private:
-
-  	bool _valid;
-    bool _write;
-    NodeState _state;
-
+private:
+	bool      _valid;
+	bool      _write;
+	NodeState _state;
 };
 
 #endif // websockets_message_h
