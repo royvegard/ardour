@@ -54,6 +54,7 @@
 #include "pbd/file_utils.h"
 
 #include "ardour/audioengine.h"
+#include "ardour/debug.h"
 #include "ardour/filename_extensions.h"
 #include "ardour/filesystem_paths.h"
 #include "ardour/profile.h"
@@ -370,6 +371,7 @@ ARDOUR_UI::nsm_init ()
 	if ((nsm_url = g_getenv ("NSM_URL")) == 0) {
 		return 0;
 	}
+	DEBUG_TRACE (DEBUG::Nsm, string_compose ("Nsm url: '%1'\n", nsm_url));
 
 	nsm = new NSM_Client;
 
@@ -390,6 +392,8 @@ ARDOUR_UI::nsm_init ()
 	 */
 	const char *process_name = g_getenv ("ARDOUR_SELF");
 	nsm->announce (PROGRAM_NAME, ":dirty:", process_name ? process_name : "ardour6");
+	DEBUG_TRACE (DEBUG::Nsm, "Announcing to nsmd\n");
+
 
 	unsigned int i = 0;
 	// wait for announce reply from nsm server
@@ -398,18 +402,21 @@ ARDOUR_UI::nsm_init ()
 
 		Glib::usleep (i);
 		if (nsm->is_active()) {
+			DEBUG_TRACE (DEBUG::Nsm, string_compose ("Nsm reply from manager: '%1'\n", nsm->session_manager_name()));
 			break;
 		}
 	}
 	if (i == 5000) {
-		error << _("NSM server did not announce itself") << endmsg;
-		return -1;
+		error << _("NSM server did not announce itself, continuing as if not under NSM control") << endmsg;
+		return 0;
 	}
 	// wait for open command from nsm server
 	for ( i = 0; i < 5000; ++i) {
 		nsm->check ();
 		Glib::usleep (1000);
 		if (nsm->client_id ()) {
+			DEBUG_TRACE (DEBUG::Nsm, string_compose ("Nsm client ID: '%1'\n", nsm->client_id()));
+			DEBUG_TRACE (DEBUG::Nsm, string_compose ("Nsm client path: '%1'\n", nsm->client_path()));
 			break;
 		}
 	}
@@ -419,8 +426,8 @@ ARDOUR_UI::nsm_init ()
 		return -1;
 	}
 
-	if (_session && nsm) {
-		_session->set_nsm_state( nsm->is_active() );
+	if (nsm) {
+		//_session->set_nsm_state( nsm->is_active() );
 	} else {
 		error << _("NSM: no session created") << endmsg;
 		return -1;
@@ -480,6 +487,10 @@ ARDOUR_UI::starting ()
 
 	app->ready ();
 
+	if (nsm_init ()) {
+		return -1;
+	}
+
 	/* we need to create this early because it may need to set the
 	 *  audio backend end up.
 	 */
@@ -493,11 +504,7 @@ ARDOUR_UI::starting ()
 		return -1;
 	}
 
-	if (nsm_init ()) {
-		return -1;
-	} else  {
-
-
+	{
 		startup_fsm = new StartupFSM (*amd);
 		startup_fsm->signal_response().connect (sigc::mem_fun (*this, &ARDOUR_UI::sfsm_response));
 

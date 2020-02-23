@@ -50,12 +50,13 @@ NSM_Client::command_open(const char* name,
 	int r = ERR_OK;
 
 	ARDOUR_COMMAND_LINE::backend_client_name = client_id;
+	ARDOUR_COMMAND_LINE::session_name = name;
 
 	/* this appears asynchronous, but almost certainly is
 	synchronous. However, there's no return value available.
 	*/
 
-	Gtkmm2ext::Application::instance()->ShouldLoad (name);
+	//Gtkmm2ext::Application::instance()->ShouldLoad (name);
 
 	return r;
 }
