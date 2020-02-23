@@ -67,6 +67,7 @@ PBD::DebugBits PBD::DEBUG::MidiRingBuffer = PBD::new_debug_bit ("midiringbuffer"
 PBD::DebugBits PBD::DEBUG::MidiSourceIO = PBD::new_debug_bit ("midisourceio");
 PBD::DebugBits PBD::DEBUG::MidiTrackers = PBD::new_debug_bit ("miditrackers");
 PBD::DebugBits PBD::DEBUG::Monitor = PBD::new_debug_bit ("monitor");
+PBD::DebugBits PBD::DEBUG::Nsm = PBD::new_debug_bit ("nsm");
 PBD::DebugBits PBD::DEBUG::OrderKeys = PBD::new_debug_bit ("orderkeys");
 PBD::DebugBits PBD::DEBUG::Panning = PBD::new_debug_bit ("panning");
 PBD::DebugBits PBD::DEBUG::Peaks = PBD::new_debug_bit ("peaks");
