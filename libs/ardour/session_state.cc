@@ -399,11 +399,9 @@ Session::post_engine_init ()
 
 	ltc_tx_initialize();
 
-	_state_of_the_state = Clean;
-
 	Port::set_connecting_blocked (false);
 
-	DirtyChanged (); /* EMIT SIGNAL */
+	set_clean ();
 
 	/* Now, finally, we can fill the playback buffers */
 
@@ -417,6 +415,7 @@ Session::post_engine_init ()
 		}
 	}
 
+	reset_xrun_count ();
 	return 0;
 }
 
@@ -425,9 +424,7 @@ Session::session_loaded ()
 {
 	SessionLoaded();
 
-	_state_of_the_state = Clean;
-
-	DirtyChanged (); /* EMIT SIGNAL */
+	set_clean ();
 
 	if (_is_new) {
 		save_state ("");
@@ -440,6 +437,7 @@ Session::session_loaded ()
 
 	BootMessage (_("Filling playback buffers"));
 	force_locate (_transport_sample, MustStop);
+	reset_xrun_count ();
 }
 
 string
@@ -651,8 +649,6 @@ Session::create (const string& session_template, BusProfile const * bus_profile)
 
 	}
 
-	_state_of_the_state = Clean;
-
 	/* set up Master Out and Monitor Out if necessary */
 
 	if (bus_profile) {
@@ -669,6 +665,9 @@ Session::create (const string& session_template, BusProfile const * bus_profile)
 				add_monitor_section ();
 		}
 	}
+
+	set_clean ();
+	reset_xrun_count ();
 
 	return 0;
 }
@@ -1384,6 +1383,8 @@ Session::state (bool save_template, snapshot_t snapshot_type, bool only_used_ass
 			const RegionFactory::RegionMap& region_map (RegionFactory::all_regions());
 			for (RegionFactory::RegionMap::const_iterator i = region_map.begin(); i != region_map.end(); ++i) {
 				boost::shared_ptr<Region> r = i->second;
+				/* regions must have sources */
+				assert (r->sources().size() > 0 && r->master_sources().size() > 0);
 				/* only store regions not attached to playlists */
 				if (r->playlist() == 0) {
 					if (boost::dynamic_pointer_cast<AudioRegion>(r)) {
@@ -2336,7 +2337,7 @@ Session::get_sources_as_xml ()
 	XMLNode* node = new XMLNode (X_("Sources"));
 	Glib::Threads::Mutex::Lock lm (source_lock);
 
-	for (SourceMap::iterator i = sources.begin(); i != sources.end(); ++i) {
+	for (SourceMap::const_iterator i = sources.begin(); i != sources.end(); ++i) {
 		node->add_child_nocopy (i->second->get_state());
 	}
 
@@ -3376,7 +3377,7 @@ Session::cleanup_sources (CleanupReport& rep)
 {
 	// FIXME: needs adaptation to midi
 
-	vector<boost::shared_ptr<Source> > dead_sources;
+	SourceList dead_sources;
 	string audio_path;
 	string midi_path;
 	vector<string> candidates;
@@ -3391,6 +3392,8 @@ Session::cleanup_sources (CleanupReport& rep)
 	set<boost::shared_ptr<Source> > sources_used_by_this_snapshot;
 
 	_state_of_the_state = StateOfTheState (_state_of_the_state | InCleanup);
+
+	Glib::Threads::Mutex::Lock ls (source_lock, Glib::Threads::NOT_LOCK);
 
 	/* this is mostly for windows which doesn't allow file
 	 * renaming if the file is in use. But we don't special
@@ -3419,6 +3422,7 @@ Session::cleanup_sources (CleanupReport& rep)
 	rep.paths.clear ();
 	rep.space = 0;
 
+	ls.acquire ();
 	for (SourceMap::iterator i = sources.begin(); i != sources.end(); ) {
 
 		SourceMap::iterator tmp;
@@ -3432,11 +3436,11 @@ Session::cleanup_sources (CleanupReport& rep)
 
 		if (!i->second->used() && (i->second->length(i->second->natural_position()) > 0)) {
 			dead_sources.push_back (i->second);
-			i->second->drop_references ();
 		}
 
 		i = tmp;
 	}
+	ls.release ();
 
 	/* build a list of all the possible audio directories for the session */
 
@@ -3477,6 +3481,7 @@ Session::cleanup_sources (CleanupReport& rep)
 	/*  add our current source list
 	*/
 
+	ls.acquire ();
 	for (SourceMap::iterator i = sources.begin(); i != sources.end(); ) {
 		boost::shared_ptr<FileSource> fs;
 		SourceMap::iterator tmp = i;
@@ -3524,11 +3529,20 @@ Session::cleanup_sources (CleanupReport& rep)
 				 * reference to it.
 				 */
 
+				dead_sources.push_back (i->second);
 				sources.erase (i);
 			}
 		}
 
 		i = tmp;
+	}
+	ls.release ();
+
+	for (SourceList::iterator i = dead_sources.begin(); i != dead_sources.end(); ++i) {
+		/* The following triggers Region::source_deleted (), which
+		 * causes regions to drop the given source */
+		(*i)->drop_references ();
+		SourceRemoved (*i); /* EMIT SIGNAL */
 	}
 
 	/* now check each candidate source to see if it exists in the list of
@@ -3662,7 +3676,10 @@ Session::cleanup_sources (CleanupReport& rep)
 		rep.space += statbuf.st_size;
 	}
 
-	/* dump the history list */
+	/* drop last Source references */
+	dead_sources.clear ();
+
+	/* dump the history list, remove references */
 
 	_history.clear ();
 
@@ -3818,11 +3835,6 @@ Session::save_history (string snapshot_name)
 	        return 0;
 	}
 
-	if (!Config->get_save_history() || Config->get_saved_history_depth() < 0 ||
-	    (_history.undo_depth() == 0 && _history.redo_depth() == 0)) {
-		return 0;
-	}
-
 	if (snapshot_name.empty()) {
 		snapshot_name = _current_snapshot_name;
 	}
@@ -3837,6 +3849,11 @@ Session::save_history (string snapshot_name)
 			error << _("could not backup old history file, current history not saved") << endmsg;
 			return -1;
 		}
+	}
+
+	if (!Config->get_save_history() || Config->get_saved_history_depth() < 0 ||
+	    (_history.undo_depth() == 0 && _history.redo_depth() == 0)) {
+		return 0;
 	}
 
 	tree.set_root (&_history.get_state (Config->get_saved_history_depth()));
@@ -3991,8 +4008,15 @@ Session::config_changed (std::string p, bool ours)
 
 	} else if (p == "punch-in") {
 
-		Location* location;
+		if (!punch_is_possible ()) {
+			if (config.get_punch_in ()) {
+				/* force off */
+				config.set_punch_in (false);
+				return;
+			}
+		}
 
+		Location* location;
 		if ((location = _locations->auto_punch_location()) != 0) {
 
 			if (config.get_punch_in ()) {
@@ -4004,8 +4028,15 @@ Session::config_changed (std::string p, bool ours)
 
 	} else if (p == "punch-out") {
 
-		Location* location;
+		if (!punch_is_possible ()) {
+			if (config.get_punch_out ()) {
+				/* force off */
+				config.set_punch_out (false);
+				return;
+			}
+		}
 
+		Location* location;
 		if ((location = _locations->auto_punch_location()) != 0) {
 
 			if (config.get_punch_out()) {

@@ -271,6 +271,7 @@ Session::Session (AudioEngine &eng,
 	, ltc_timecode_offset (0)
 	, ltc_timecode_negative_offset (false)
 	, midi_control_ui (0)
+	, _punch_or_loop (NoConstraint)
 	, _tempo_map (0)
 	, _all_route_group (new RouteGroup (*this, "all"))
 	, routes (new RouteList)
@@ -1397,6 +1398,88 @@ Session::auto_punch_start_changed (Location* location)
 	}
 }
 
+bool
+Session::punch_active () const
+{
+	if (!get_record_enabled ()) {
+		return false;
+	}
+	if (!_locations->auto_punch_location ()) {
+		return false;
+	}
+	return config.get_punch_in () || config.get_punch_out ();
+}
+
+bool
+Session::punch_is_possible () const
+{
+	return g_atomic_int_get (&_punch_or_loop) != OnlyLoop;
+}
+
+bool
+Session::loop_is_possible () const
+{
+#if 0 /* maybe prevent looping even when not rolling ? */
+	if (get_record_enabled () && punch_active ()) {
+			return false;
+		}
+	}
+#endif
+	return g_atomic_int_get(&_punch_or_loop) != OnlyPunch;
+}
+
+void
+Session::reset_punch_loop_constraint ()
+{
+	if (g_atomic_int_get (&_punch_or_loop) == NoConstraint) {
+		return;
+	}
+	g_atomic_int_set (&_punch_or_loop, NoConstraint);
+	PunchLoopConstraintChange (); /* EMIT SIGNAL */
+}
+
+bool
+Session::maybe_allow_only_loop (bool play_loop) {
+	if (!(get_play_loop () || play_loop)) {
+		return false;
+	}
+	bool rv = g_atomic_int_compare_and_exchange (&_punch_or_loop, NoConstraint, OnlyLoop);
+	if (rv) {
+		PunchLoopConstraintChange (); /* EMIT SIGNAL */
+	}
+	if (rv || loop_is_possible ()) {
+		unset_punch ();
+		return true;
+	}
+	return false;
+}
+
+bool
+Session::maybe_allow_only_punch () {
+	if (!punch_active ()) {
+		return false;
+	}
+	bool rv = g_atomic_int_compare_and_exchange (&_punch_or_loop, NoConstraint, OnlyPunch);
+	if (rv) {
+		PunchLoopConstraintChange (); /* EMIT SIGNAL */
+	}
+	return rv || punch_is_possible ();
+}
+
+void
+Session::unset_punch ()
+{
+	/* used when enabling looping
+	 * -> _punch_or_loop = OnlyLoop;
+	 */
+	if (config.get_punch_in ()) {
+		config.set_punch_in (false);
+	}
+	if (config.get_punch_out ()) {
+		config.set_punch_out (false);
+	}
+}
+
 void
 Session::auto_punch_end_changed (Location* location)
 {
@@ -1430,7 +1513,7 @@ Session::auto_loop_changed (Location* location)
 
 	if (rolling) {
 
-		if (play_loop) {
+		if (get_play_loop ()) {
 
 			if (_transport_sample < location->start() || _transport_sample > location->end()) {
 
@@ -1563,15 +1646,9 @@ Session::set_auto_loop_location (Location* location)
 
 	location->set_auto_loop (true, this);
 
-	if (Config->get_loop_is_mode() && play_loop) {
-		// set all tracks to use internal looping
-		boost::shared_ptr<RouteList> rl = routes.reader ();
-		for (RouteList::iterator i = rl->begin(); i != rl->end(); ++i) {
-			boost::shared_ptr<Track> tr = boost::dynamic_pointer_cast<Track> (*i);
-			if (tr && !tr->is_private_route()) {
-				tr->set_loop (location);
-			}
-		}
+	if (Config->get_loop_is_mode() && get_play_loop ()) {
+		/* set all tracks to use internal looping */
+		set_track_loop (true);
 	}
 
 	/* take care of our stuff first */
@@ -1734,7 +1811,7 @@ Session::location_removed (Location *location)
 {
 	if (location->is_auto_loop()) {
 		set_auto_loop_location (0);
-		if (!play_loop) {
+		if (!get_play_loop ()) {
 			set_track_loop (false);
 		}
 		unset_play_loop ();
@@ -1877,6 +1954,7 @@ Session::maybe_enable_record (bool rt_context)
 	}
 
 	if (_transport_speed) {
+		maybe_allow_only_punch ();
 		if (!config.get_punch_in()) {
 			enable_record ();
 		}
@@ -2143,7 +2221,7 @@ Session::resort_routes_using (boost::shared_ptr<RouteList> r)
 
 		for (RouteList::iterator j = r->begin(); j != r->end(); ++j) {
 
-			bool via_sends_only;
+			bool via_sends_only = false;
 
 			/* See if this *j feeds *i according to the current state of the JACK
 			   connections and internal sends.
@@ -4488,7 +4566,7 @@ Session::count_sources_by_origin (const string& path)
 	uint32_t cnt = 0;
 	Glib::Threads::Mutex::Lock lm (source_lock);
 
-	for (SourceMap::iterator i = sources.begin(); i != sources.end(); ++i) {
+	for (SourceMap::const_iterator i = sources.begin(); i != sources.end(); ++i) {
 		boost::shared_ptr<FileSource> fs
 			= boost::dynamic_pointer_cast<FileSource>(i->second);
 
@@ -5466,6 +5544,9 @@ Session::mark_insert_id (uint32_t id)
 void
 Session::unmark_send_id (uint32_t id)
 {
+	if (deletion_in_progress ()) {
+		return;
+	}
 	if (id < send_bitset.size()) {
 		send_bitset[id] = false;
 	}
@@ -5474,6 +5555,9 @@ Session::unmark_send_id (uint32_t id)
 void
 Session::unmark_aux_send_id (uint32_t id)
 {
+	if (deletion_in_progress ()) {
+		return;
+	}
 	if (id < aux_send_bitset.size()) {
 		aux_send_bitset[id] = false;
 	}
@@ -5493,6 +5577,9 @@ Session::unmark_return_id (uint32_t id)
 void
 Session::unmark_insert_id (uint32_t id)
 {
+	if (deletion_in_progress ()) {
+		return;
+	}
 	if (id < insert_bitset.size()) {
 		insert_bitset[id] = false;
 	}

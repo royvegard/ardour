@@ -16,7 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifdef DEBUG
+#ifndef NDEBUG
 #include <iostream>
 #endif
 
@@ -245,7 +245,7 @@ WebsocketsServer::recv_client (Client wsi, void* buf, size_t len)
 		return;
 	}
 
-#ifdef DEBUG
+#ifndef NDEBUG
 	std::cerr << "RX " << msg.state ().debug_str () << std::endl;
 #endif
 
@@ -282,7 +282,7 @@ WebsocketsServer::write_client (Client wsi)
 	size_t        len = msg.serialize (out_buf + LWS_PRE, 1024 - LWS_PRE);
 
 	if (len > 0) {
-#ifdef DEBUG
+#ifndef NDEBUG
 		std::cerr << "TX " << msg.state ().debug_str () << std::endl;
 #endif
 		lws_write (wsi, out_buf + LWS_PRE, len, LWS_WRITE_TEXT);
@@ -293,6 +293,14 @@ WebsocketsServer::write_client (Client wsi)
 	if (!pending.empty ()) {
 		lws_callback_on_writable (wsi);
 	}
+}
+
+void
+WebsocketsServer::reject_http_client (Client wsi)
+{
+	const char *html_body = "<p>This URL is not meant to be accessed via HTTP; for example using"
+		" a web browser. Refer to Ardour documentation for further information.</p>";
+	lws_return_http_status (wsi, 404, html_body);
 }
 
 bool
@@ -388,7 +396,41 @@ WebsocketsServer::lws_callback (struct lws* wsi, enum lws_callback_reasons reaso
 			server->write_client (wsi);
 			break;
 
+		case LWS_CALLBACK_HTTP:
+			server->reject_http_client (wsi);
+			return 1;
+			break;
+
+		case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
+		case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
+		case LWS_CALLBACK_SERVER_NEW_CLIENT_INSTANTIATED:
+		case LWS_CALLBACK_PROTOCOL_INIT:
+		case LWS_CALLBACK_PROTOCOL_DESTROY:
+		case LWS_CALLBACK_WSI_CREATE:
+		case LWS_CALLBACK_WSI_DESTROY:
+		case LWS_CALLBACK_LOCK_POLL:
+		case LWS_CALLBACK_UNLOCK_POLL:
+		case LWS_CALLBACK_WS_PEER_INITIATED_CLOSE:
+		case LWS_CALLBACK_FILTER_HTTP_CONNECTION:
+#if LWS_LIBRARY_VERSION_MAJOR >= 3
+		case LWS_CALLBACK_HTTP_BIND_PROTOCOL:
+		case LWS_CALLBACK_ADD_HEADERS:
+#if LWS_LIBRARY_VERSION_MINOR >= 1
+		case LWS_CALLBACK_HTTP_CONFIRM_UPGRADE:
+#endif
+#endif
+			break;
+
+		/* TODO: handle HTTP connections.
+		 * Serve static ctrl-surface pages, JS, CSS etc.
+		 */
+
 		default:
+#ifndef NDEBUG
+			/* see libwebsockets.h lws_callback_reasons */
+			std::cerr << "LWS: unhandled callback " << reason << std::endl;
+#endif
+			return -1;
 			break;
 	}
 
